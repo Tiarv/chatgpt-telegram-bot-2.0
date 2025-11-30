@@ -608,13 +608,21 @@ def get_conversation_key(update: Update) -> tuple[int, Optional[int]]:
 
 def should_respond(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    1. Do NOT respond if the message is a reply to someone else's message
-       (i.e. not the bot and not the same user).
-    2. Do NOT respond if someone is mentioned and the bot is NOT.
+    Rules:
+
+    1. If the message mentions someone and does NOT mention the bot -> do NOT respond,
+       even if it is a reply.
+    2. For replies:
+       - Replies to the bot -> respond (unless rule 1 blocks it).
+       - Replies to self -> respond (unless rule 1 blocks it).
+       - Replies to anyone else -> do NOT respond.
+    3. For non-replies:
+       - If there are no mentions, respond.
+       - If the bot is mentioned, respond.
 
     Works for:
       - plain text messages (msg.text + msg.entities)
-      - media captions (msg.caption + msg.caption_entities)
+      - media/document captions (msg.caption + msg.caption_entities)
     """
     msg = update.message
     if msg is None:
@@ -622,28 +630,9 @@ def should_respond(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
     bot = context.bot
     bot_id = bot.id
-    bot_username = bot.username
+    bot_username = bot.username or ""
 
-    # --- Rule 2: replies ---
-    if msg.reply_to_message:
-        replied = msg.reply_to_message
-        replied_user = replied.from_user
-
-        if replied_user is None:
-            return False
-
-        # Replies to the bot: always OK
-        if replied_user.id == bot_id:
-            return True
-
-        # Replies to self: allow
-        if msg.from_user and replied_user.id == msg.from_user.id:
-            return True
-
-        # Replies to any other user/bot -> ignore
-        return False
-
-    # Decide which text/entities to inspect: text or caption
+    # --- Decide which text/entities to inspect: text or caption ---
     if msg.text:
         text = msg.text
         entities = msg.entities or []
@@ -651,13 +640,13 @@ def should_respond(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         text = msg.caption
         entities = msg.caption_entities or []
     else:
-        # No textual content: no mentions => OK
-        return True
+        text = ""
+        entities = []
 
-    # --- Rule 1: mentions in text / caption ---
-    mentioned_usernames = set()
-    mentioned_user_ids = set()
+    mentioned_usernames: set[str] = set()
+    mentioned_user_ids: set[int] = set()
 
+    # 1) Use Telegram's explicit mention entities when present
     for ent in entities:
         if ent.type == MessageEntityType.MENTION:
             segment = text[ent.offset : ent.offset + ent.length]
@@ -666,22 +655,53 @@ def should_respond(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         elif ent.type == MessageEntityType.TEXT_MENTION and ent.user:
             mentioned_user_ids.add(ent.user.id)
 
+    # 2) Fallback: scan raw text for "@handle" patterns not in entities
+    #    This covers cases where the client didn't create entities.
+    if text:
+        for m in re.finditer(r"@([A-Za-z0-9_]{3,})", text):
+            uname = m.group(1)
+            if uname not in mentioned_usernames:
+                mentioned_usernames.add(uname)
+
     mentions_anyone = bool(mentioned_usernames or mentioned_user_ids)
 
     # Did they mention the bot?
     mentions_bot = False
     if bot_username:
-        mentions_bot = any(
-            name.casefold() == bot_username.casefold()
-            for name in mentioned_usernames
-        )
+        for name in mentioned_usernames:
+            if name.casefold() == bot_username.casefold():
+                mentions_bot = True
+                break
     if not mentions_bot and bot_id:
-        mentions_bot = bot_id in mentioned_user_ids
+        if bot_id in mentioned_user_ids:
+            mentions_bot = True
 
-    # If someone is mentioned and it's not the bot -> don't respond
+    # --- Global mention rule: if someone is mentioned and it's NOT the bot -> ignore ---
     if mentions_anyone and not mentions_bot:
         return False
 
+    # --- Reply rules ---
+    if msg.reply_to_message:
+        replied = msg.reply_to_message
+        replied_user = replied.from_user
+        if replied_user is None:
+            return False
+
+        # Replies to the bot: respond (mentions rule already applied above)
+        if replied_user.id == bot_id:
+            return True
+
+        # Replies to self: respond
+        if msg.from_user and replied_user.id == msg.from_user.id:
+            return True
+
+        # Replies to anyone else: ignore
+        return False
+
+    # --- Non-replies ---
+    # If we reach here, either:
+    # - there were no mentions, or
+    # - the bot was mentioned.
     return True
 
 
