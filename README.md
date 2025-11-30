@@ -5,6 +5,8 @@ Designed to work inside a supergroup with topics: to imitate tabs inside chatgpt
 
 ## How to install
 
+```bash
 python3 -m venv venv
 . venv/bin/activate
 pip install python-telegram-bot openai PyPDF2
+```
