@@ -3,8 +3,10 @@ A telegram bot that provides access to an OpenAI' LLMs
 
 Designed to work inside a supergroup with topics: to imitate tabs inside chatgpt
 
-NB! You need your organization to be verified by the OpenAI in order for 
+NB! You need your organization to be verified by the OpenAI in order for
+
 streaming to work properly with recent models, also to have access to 
+
 gpt-image-1 model through an API.
 
 ## How to install
